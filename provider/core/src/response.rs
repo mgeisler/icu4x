@@ -71,7 +71,7 @@ pub struct DataPayload<M>
 where
     M: DataMarker,
 {
-    pub(crate) yoke: Yoke<M::Yokeable, Option<RcWrap<u8>>>,
+    pub(crate) yoke: Yoke<M::Yokeable, Option<RcWrap<[u8]>>>,
 }
 
 impl<M> Debug for DataPayload<M>
@@ -125,41 +125,41 @@ where
 {
 }
 
-/// A wrapper type that wraps either an [`Rc`](alloc::rc::Rc) or an
-/// [`Arc`](alloc::sync::Arc), depending on the "sync" feature. Create
-/// this from a `&[T]`.
-#[derive(Clone)]
-pub struct RcWrap<T>(
-    #[cfg(not(feature = "sync"))] alloc::rc::Rc<[T]>,
-    #[cfg(feature = "sync")] alloc::sync::Arc<[T]>,
-);
+use core::ops::Deref;
+#[cfg(not(feature = "sync"))]
+use alloc::rc::Rc;
+#[cfg(feature = "sync")]
+use alloc::sync::Arc as Rc;
 
-impl<T> core::ops::Deref for RcWrap<T> {
-    type Target = [T];
+/// A wrapper type that wraps either an [`Rc`](alloc::rc::Rc) or an
+/// [`Arc`](alloc::sync::Arc), depending on the "sync" feature.
+#[derive(Debug)]
+pub struct RcWrap<T: ?Sized>(Rc<T>);
+
+impl<T: ?Sized> Deref for RcWrap<T> where Rc<T>: Deref {
+    type Target = <Rc::<T> as Deref>::Target;
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        <Rc::<T> as Deref>::deref(&self.0)
+    }
+}
+
+impl<F, T: ?Sized> From<F> for RcWrap<T> where Rc<T>: From<F> {
+    fn from(other: F) -> Self {
+        RcWrap(other.into())
+    }
+}
+
+impl<T: ?Sized> Clone for RcWrap<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
 // Safe because both Rc and Arc are CloneableCart
-unsafe impl<T: Clone> CloneableCart for RcWrap<T> {}
+unsafe impl<T: ?Sized> CloneableCart for RcWrap<T> {}
 
 // Safe because both Rc and Arc are StableDeref
-unsafe impl<T> stable_deref_trait::StableDeref for RcWrap<T> {}
-
-impl<T> From<alloc::vec::Vec<T>> for RcWrap<T> {
-    fn from(other: alloc::vec::Vec<T>) -> Self {
-        Self(other.into())
-    }
-}
-
-// Constructing from `Box<[T]>` copies the whole slice, so we might
-// as well define this on a slice directly.
-impl<T: Clone> From<&[T]> for RcWrap<T> {
-    fn from(other: &[T]) -> Self {
-        Self(other.into())
-    }
-}
+unsafe impl<T: ?Sized> stable_deref_trait::StableDeref for RcWrap<T> {}
 
 #[test]
 fn test_clone_eq() {
@@ -183,7 +183,7 @@ where
     /// [`try_from_rc_buffer_badly()`](Self::try_from_rc_buffer_badly) instead.
     #[inline]
     pub fn try_from_rc_buffer<E>(
-        buffer: RcWrap<u8>,
+        buffer: RcWrap<[u8]>,
         f: impl for<'de> FnOnce(&'de [u8]) -> Result<<M::Yokeable as Yokeable<'de>>::Output, E>,
     ) -> Result<Self, E> {
         let yoke = Yoke::try_attach_to_cart(buffer, f)?.wrap_cart_in_option();
@@ -216,7 +216,7 @@ where
     /// ```
     #[allow(clippy::type_complexity)]
     pub fn try_from_rc_buffer_badly<E>(
-        buffer: RcWrap<u8>,
+        buffer: RcWrap<[u8]>,
         f: for<'de> fn(&'de [u8]) -> Result<<M::Yokeable as Yokeable<'de>>::Output, E>,
     ) -> Result<Self, E> {
         let yoke = Yoke::try_attach_to_cart(buffer, f)?.wrap_cart_in_option();
@@ -253,7 +253,7 @@ where
     /// ```
     #[allow(clippy::type_complexity)]
     pub fn try_from_yoked_buffer<F, E>(
-        yoked_buffer: Yoke<&'static [u8], RcWrap<u8>>,
+        yoked_buffer: Yoke<&'static [u8], RcWrap<[u8]>>,
         f: F,
     ) -> Result<Self, E>
     where
@@ -571,14 +571,14 @@ where
 impl DataPayload<BufferMarker> {
     /// Converts an [`RcWrap`] into a `DataPayload<BufferMarker>`. The [`RcWrap`]
     /// can be obtained from a `&[u8]`.
-    pub fn from_rc_buffer(buffer: RcWrap<u8>) -> Self {
+    pub fn from_rc_buffer(buffer: RcWrap<[u8]>) -> Self {
         Self {
             yoke: Yoke::attach_to_cart(buffer, |b| b).wrap_cart_in_option(),
         }
     }
 
     /// Converts a yoked byte buffer into a `DataPayload<BufferMarker>`.
-    pub fn from_yoked_buffer(yoked_buffer: Yoke<&'static [u8], RcWrap<u8>>) -> Self {
+    pub fn from_yoked_buffer(yoked_buffer: Yoke<&'static [u8], RcWrap<[u8]>>) -> Self {
         Self {
             yoke: yoked_buffer.wrap_cart_in_option(),
         }
